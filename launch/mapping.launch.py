@@ -22,6 +22,8 @@ from launch.actions import (
 def generate_launch_description():
     current_time = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
     bag_name = f"ORB_SLAM3_{current_time}"
+
+    #use_sim_time_param = {'use_sim_time': True}
     return LaunchDescription(
         [
             DeclareLaunchArgument(
@@ -51,13 +53,6 @@ def generate_launch_description():
                 description="Whether to use Pangolin for visualization.",
             ),
             DeclareLaunchArgument(
-                "playback_bag",
-                default_value="changeme",
-                description="The rosbag to play during execution. If set, the \
-                realsense2_camera node will not launch. Otherwise, nothing\
-                will happen.",
-            ),
-            DeclareLaunchArgument(
                 "record_bag",
                 default_value="false",
                 description="Whether or not to record a rosbag.",
@@ -71,10 +66,7 @@ def generate_launch_description():
             ),
             DeclareLaunchArgument(
                 "dataset_root",
-                default_value=PathJoinSubstitution([
-                    FindPackageShare("orb_slam3_ros2"),
-                    "datasets"
-                ]),
+                default_value="/home/maria/ros2_ws/src/ORB_SLAM3_ROS2/datasets",
                 description="Root folder containing TUM-VI datasets",
             ),
 
@@ -83,100 +75,48 @@ def generate_launch_description():
                 default_value="outdoors4",
                 description="Which dataset folder inside dataset_root to use",
             ),
-            # IncludeLaunchDescription(
-            #     PythonLaunchDescriptionSource(
-            #         PathJoinSubstitution(
-            #             [
-            #                 #FindPackageShare("realsense2_camera"),
-            #                 "launch",
-            #                 "rs_launch.py",
-            #             ]
-            #         )
-            #     ),
-            #     launch_arguments={
-            #         "namespace": "",
-            #         "initial_reset": "false",
-            #         "rgb_camera.color_profile": "640x480x30",
-            #         "rgb_camera.enable_auto_exposure": "true",
-            #         "enable_accel": "true",
-            #         "enable_gyro": "true",
-            #         "unite_imu_method": "2",
-            #         "enable_depth": "false",
-            #     }.items(),
-            #     condition=IfCondition(
-            #         PythonExpression(
-            #             [
-            #                 "'",
-            #                 LaunchConfiguration("playback_bag"),
-            #                 "' == 'changeme'",
-            #             ]
-            #         )
-            #     ),
-            # ),
-            # Node(
-            #     package="orb_slam3_ros2",
-            #     executable="imu_mono_node_cpp",
-            #     output="screen",
-            #     # prefix="xterm -e gdb --args",
-            #     parameters=[
-            #         {
-            #             "sensor_type": LaunchConfiguration("sensor_type"),
-            #             "use_pangolin": LaunchConfiguration("use_pangolin"),
-            #         }
-            #     ],
-            # ),
+            
+            DeclareLaunchArgument(
+                "speed_factor",
+                default_value="1.0",
+                description="Speed factor for dataset playback (1.0 = real-time)",
+            ),
+            ExecuteProcess(
+                cmd=[
+                    "python3", 
+                    "/home/maria/ros2_ws/src/ORB_SLAM3_ROS2/ORB_SLAM3_ROS2/dataset_loader.py",
+                    "/home/maria/ros2_ws/src/ORB_SLAM3_ROS2/datasets",
+                    "outdoors4",
+                    #"--ros-args", "-p", "use_sim_time:=true"
+                ],
+                output="screen",
+            ),
+
             Node(
                 package="orb_slam3_ros2",
                 executable="imu_mono_node_cpp",
                 output="screen",
+                # prefix="xterm -e gdb --args",
                 parameters=[
                     {
                         "sensor_type": LaunchConfiguration("sensor_type"),
                         "use_pangolin": LaunchConfiguration("use_pangolin"),
+                        #"use_sim_time": True,
                     }
                 ],
-                remappings=[
-                    ("/camera/image_raw", "/cam0/image_raw"),
-                    ("/imu", "/imu0"),
-                ]
             ),
-            # Node(
-            #     package="robot_state_publisher",
-            #     executable="robot_state_publisher",
-            #     output="screen",
-            #     parameters=[
-            #         {
-            #             "robot_description": ParameterValue(
-            #                 Command(
-            #                     [
-            #                         "xacro",
-            #                         " ",
-            #                         PathJoinSubstitution(
-            #                             [
-            #                                 #FindPackageShare(
-            #                                 #   "realsense2_description"
-            #                                 #),
-            #                                 "urdf",
-            #                                 "test_d435i_camera.urdf.xacro",
-            #                             ]
-            #                         ),
-            #                     ]
-            #                 ),
-            #                 value_type=str,
-            #             ),
-            #         }
-            #     ],
-            # ),
             Node(
                 package="tf2_ros",
                 executable="static_transform_publisher",
                 output="screen",
                 arguments=["0", "0", "0", "0", "0", "0", "world", "map"],
+                #parameters=[use_sim_time_param],
             ),
             Node(
                 package="rviz2",
                 executable="rviz2",
                 output="screen",
+                #parameters=[use_sim_time_param],
                 arguments=[
                     "-d",
                     PathJoinSubstitution(
@@ -193,76 +133,5 @@ def generate_launch_description():
                     )
                 ),
             ),
-            # Node(
-            #     package="orb_slam3_ros2",
-            #     executable="tumvi_dataset_player",
-            #     name="dataset_player",
-            #     output="screen",
-            #     parameters=[
-            #         {"dataset_root": LaunchConfiguration("dataset_root")},
-            #         {"dataset": LaunchConfiguration("dataset")},
-            #         {"publish_rate": "100.0"},
-            #         ],
-            # ),
-            ExecuteProcess(
-                cmd=["python3", 
-                    PathJoinSubstitution([
-                        FindPackageShare("orb_slam3_ros2"),
-                        "ORB_SLAM3_ROS2",
-                        "dataset_loader.py"
-                    ]),
-                    LaunchConfiguration("dataset_root"),
-                    LaunchConfiguration("dataset")   
-                ],
-                output="screen",
-            ),
-
-            # ExecuteProcess(
-            #     cmd=[
-            #         "ros2",
-            #         "bag",
-            #         "play",
-            #         PathJoinSubstitution(
-            #             [
-            #                 FindPackageShare("orb_slam3_ros2"),
-            #                 "bags",
-            #                 LaunchConfiguration("playback_bag"),
-            #             ]
-            #         ),
-            #     ],
-            #     shell=True,
-            #     condition=IfCondition(
-            #         PythonExpression(
-            #             [
-            #                 "'",
-            #                 LaunchConfiguration("playback_bag"),
-            #                 "' != 'changeme'",
-            #             ]
-            #         )
-            #     ),
-            # ),
-            # ExecuteProcess(
-            #     cmd=[
-            #         "ros2",
-            #         "bag",
-            #         "record",
-            #         "-o",
-            #         PathJoinSubstitution(
-            #             [
-            #                 "./ORB_SLAM3_ROS2",
-            #                 "bags",
-            #                 LaunchConfiguration("bag_name"),
-            #             ]
-            #         ),
-            #         "/camera/camera/imu",
-            #         "/camera/camera/color/image_raw",
-            #     ],
-            #     shell=True,
-            #     condition=IfCondition(
-            #         PythonExpression(
-            #             ["'", LaunchConfiguration("record_bag"), "' == 'true'"]
-            #         )
-            #     ),
-            # ),
         ],
     )

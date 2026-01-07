@@ -29,6 +29,10 @@
 #include <tf2/LinearMath/Quaternion.h>
 #include <tf2_ros/transform_broadcaster.h>
 
+#include <message_filters/subscriber.h>
+#include <message_filters/time_synchronizer.h>
+#include <message_filters/sync_policies/approximate_time.h>
+
 #include "nav2_map_server/map_io.hpp"
 
 #include <chrono>
@@ -133,6 +137,17 @@ public:
       "/imu0", imu_qos,
       std::bind(&ImuMono::imu_callback, this, _1), imu_options);
 
+    // politica de sincronización
+    typedef message_filters::sync_policies::ApproximateTime<sensor_msgs::msg::Image, sensor_msgs::msg::Imu> SyncPolicy;
+
+    // Suscriptores de filtro
+    message_filters::Subscriber<sensor_msgs::msg::Image> image_filt_sub_;
+    message_filters::Subscriber<sensor_msgs::msg::Imu> imu_filt_sub_;
+
+    // sincronizador
+    std::shared_ptr<message_filters::Synchronizer<SyncPolicy>> sync_;
+    
+      
     // tf broadcaster
     tf_broadcaster = std::make_unique<tf2_ros::TransformBroadcaster>(*this);
 
@@ -301,19 +316,21 @@ private:
   cv::Mat get_image(const sensor_msgs::msg::Image::SharedPtr msg)
   {
     cv_bridge::CvImageConstPtr cv_ptr;
+    cv::Mat imageFrame;
 
     try {
       cv_ptr = cv_bridge::toCvShare(msg, sensor_msgs::image_encodings::MONO8);
     } catch (cv_bridge::Exception &e) {
       RCLCPP_ERROR(get_logger(), "cv_bridge exception: %s", e.what());
+      return imageFrame;
     }
 
-    if (cv_ptr->image.type() == 0) {
-      return cv_ptr->image.clone();
+    if (cv_ptr && !cv_ptr->image.empty()) {
+      imageFrame = cv_ptr->image.clone();
     } else {
-      std::cerr << "Error image type" << std::endl;
-      return cv_ptr->image.clone();
+      RCLCPP_ERROR(get_logger(), "Imagen convertida es nula o vacía.");
     }
+    return imageFrame;
   }
 
   void image_callback(const sensor_msgs::msg::Image::SharedPtr msg)
@@ -349,6 +366,10 @@ private:
         imu_buf_.pop();
         double tIMU =
           imuPtr->header.stamp.sec + imuPtr->header.stamp.nanosec * 1e-9;
+        
+          if (tIMU > tImage_) {
+          break;  
+        }
 
         cv::Point3f acc(imuPtr->linear_acceleration.x,
                         imuPtr->linear_acceleration.y,
@@ -376,13 +397,18 @@ private:
           Tcw_.translation() = Tcw.translation();
           Tcw_.setQuaternion(Tcw.unit_quaternion());
         } else {
-          if (vImuMeas.size() > 1) {
-            auto Tcw =
-              orb_slam3_system_->TrackMonocular(imageFrame, tImage_local, vImuMeas);
-            Tcw_.translation() = Tcw.translation();
-            Tcw_.setQuaternion(Tcw.unit_quaternion());
+          if (!vImuMeas.empty()) 
+            {
+              auto Tcw = orb_slam3_system_->TrackMonocular(imageFrame, tImage_local, vImuMeas);
+              Tcw_.translation() = Tcw.translation();
+              Tcw_.setQuaternion(Tcw.unit_quaternion());
+            } else {
+
+              RCLCPP_WARN(get_logger(), "IMU data missing when required.");
+              orbslam3_mutex_.unlock();
+              return;
+            }
           }
-        }
         cv::Mat pretty_frame = orb_slam3_system_->getPrettyFrame();
         video_writer_.write(pretty_frame);
 

@@ -1,6 +1,9 @@
 import rclpy
 from rclpy.node import Node
 from rclpy.time import Time
+from rclpy.qos import QoSProfile, DurabilityPolicy, ReliabilityPolicy, HistoryPolicy
+from rcl_interfaces.msg import ParameterDescriptor
+from rosgraph_msgs.msg import Clock
 
 from sensor_msgs.msg import Image, Imu, CameraInfo
 from cv_bridge import CvBridge
@@ -19,8 +22,10 @@ from pathlib import Path
 class TUMVIDatasetPlayer(Node):
     def __init__(self, base_path, dataset_name):
         super().__init__("tumvi_dataset_player")
+        
 
-       
+        self.pub_clock = self.create_publisher(Clock, "/clock", 10)
+
         # PARAMETERS
         self.base_path = base_path
         self.dataset_name = dataset_name
@@ -48,10 +53,25 @@ class TUMVIDatasetPlayer(Node):
 
         self.bridge = CvBridge()
 
+        #Perfil QoS
+        image_qos = QoSProfile(
+            depth=10,
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+        )
+
+        imu_qos = QoSProfile(
+            history=HistoryPolicy.KEEP_LAST,
+            depth=10,
+            reliability=ReliabilityPolicy.BEST_EFFORT,
+            durability=DurabilityPolicy.VOLATILE
+        )
+
         # PUBLISHERS (topics del dataset)
-        self.pub_image = self.create_publisher(Image, "/cam0/image_raw", 10)
-        self.pub_imu = self.create_publisher(Imu, "/imu0", 200)
-        self.pub_camera_info = self.create_publisher(CameraInfo, "/cam0/camera_info", 10)
+        self.pub_image = self.create_publisher(Image, "/cam0/image_raw", image_qos)
+        self.pub_imu = self.create_publisher(Imu, "/imu0", imu_qos)
+        self.pub_camera_info = self.create_publisher(CameraInfo, "/cam0/camera_info", image_qos)
 
         # LOAD DATASET FILES
         self.load_image_data()
@@ -65,6 +85,10 @@ class TUMVIDatasetPlayer(Node):
         self.dataset_start_time = self.image_data[0][0] if self.image_data else 0
         self.wall_start_time = time.time()
 
+        #Condicion para que el dataset espere un poco
+        self.startup_delay = 0.0 
+        self.first_publish = True
+
         # timer principal
         self.timer = self.create_timer(1.0 / self.publish_rate, self.timer_callback)
 
@@ -75,8 +99,8 @@ class TUMVIDatasetPlayer(Node):
 
     # LOAD IMAGE DATA
     def load_image_data(self):
-        cam_folder = os.path.join(self.dataset_path, "cam0", "data")
-        csv_path = os.path.join(self.dataset_path, "cam0", "data.csv")
+        cam_folder = os.path.join(self.dataset_path, "cam0")
+        csv_path = os.path.join(cam_folder, "data.csv")
 
         if not os.path.exists(csv_path):
             raise FileNotFoundError(csv_path)
@@ -90,7 +114,7 @@ class TUMVIDatasetPlayer(Node):
             for row in reader:
                 timestamp = float(row[0]) * 1e-9  # nanoseconds → seconds
                 filename = row[1]
-                filepath = os.path.join(cam_folder, filename)
+                filepath = os.path.join(cam_folder, "data", filename)
 
                 if os.path.exists(filepath):
                     self.image_data.append((timestamp, filepath))
@@ -139,6 +163,11 @@ class TUMVIDatasetPlayer(Node):
         nanoseconds = int((timestamp - seconds) * 1e9)
         return rclpy.time.Time(seconds=seconds, nanoseconds=nanoseconds).to_msg()
 
+        if not hasattr(self, '_logged_timestamp'):
+            self._logged_timestamp = True
+            self.get_logger().info(f"Primer timestamp dataset: {timestamp:.6f} sec")
+            self.get_logger().info(f"   -> ROS time: {seconds}s + {nanoseconds}ns")
+
     #obtiene la informacion basica de la camara
     def create_camera_info(self, timestamp):
         info = CameraInfo()
@@ -150,11 +179,30 @@ class TUMVIDatasetPlayer(Node):
 
     #TIMER
     def timer_callback(self):
+        
         current_dataset_time = self.get_dataset_time()
 
+        print(f"DEBUG: Reloj={current_dataset_time:.3f} | Img_Idx={self.img_idx}/{len(self.image_data)}", end='\r')
+
+        # msg_clock = Clock()
+        # msg_clock.clock = self.timestamp_to_ros(current_dataset_time)
+        # self.pub_clock.publish(msg_clock)
+
+        #retraso inicial
+        if self.first_publish:
+            elapsed_startup = time.time() - self.wall_start_time
+            if elapsed_startup < self.startup_delay:
+                return  # Esperar hasta completar el delay
+            else:
+                self.first_publish = False
+                self.wall_start_time = time.time()  # Reiniciar el contador
+                self.get_logger().info("Iniciando publicación de datos...")
+                return
+
         # Publicar IMU
+        imu_look_ahead = 0.05
         while (self.imu_idx < len(self.imu_data) and 
-               self.imu_data[self.imu_idx][0] <= current_dataset_time):
+               self.imu_data[self.imu_idx][0] <= (current_dataset_time + imu_look_ahead)):
             t, wx, wy, wz, ax, ay, az = self.imu_data[self.imu_idx]
 
             msg = Imu()
@@ -208,32 +256,33 @@ class TUMVIDatasetPlayer(Node):
 
 
 def main(args=None):
-
+    
     # Parser de argumentos CLI
     parser = argparse.ArgumentParser(description='TUM-VI Dataset Player for ROS2')
     parser.add_argument('base_path', help='Base path to datasets folder')
     parser.add_argument('dataset', help='Dataset name (e.g., outdoors4)')
     
     # Filtrar argumentos de ROS2 (que empiezan con __)
-    filtered_args = [arg for arg in sys.argv[1:] if not arg.startswith('__')]
-    
-    try:
-        parsed = parser.parse_args(filtered_args)
-    except SystemExit:
-        print("\nERROR: Argumentos incorrectos")
+    try: 
+        parsed, unknown = parser.parse_known_args()
+    except Exception as e:
+        print(f"\nERROR al parsear argumentos: {e}")
         return
 
     # Inicializar ROS2
     rclpy.init(args=args)
-    
+    node = None 
     try:
         node = TUMVIDatasetPlayer(parsed.base_path, parsed.dataset)
         rclpy.spin(node)
     except Exception as e:
         print(f"Error al iniciar el nodo: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
-        if rclpy.ok():
+        if node is not None:
             node.destroy_node()
+        if rclpy.ok():
             rclpy.shutdown()
 
 

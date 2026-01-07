@@ -21,8 +21,10 @@
   <depend>image_transport</depend>
   <depend>pcl_ros</depend>
   <depend>pcl_conversions</depend>
+  <depend>message_filters</depend>
   <buildtool_depend>ament_cmake</buildtool_depend>
   <buildtool_depend>ament_cmake_python</buildtool_depend>
+
 
   <depend>rclpy</depend>
 

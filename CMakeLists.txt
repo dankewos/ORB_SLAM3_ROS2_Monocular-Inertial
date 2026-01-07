@@ -1,6 +1,10 @@
 cmake_minimum_required(VERSION 3.8)
 project(orb_slam3_ros2)
 
+add_definitions(-DEIGEN_MALLOC_ALREADY_ALIGNED=0)
+add_definitions(-DEIGEN_DONT_VECTORIZE)
+add_definitions(-DEIGEN_DISABLE_UNALIGNED_ARRAY_ASSERT)
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(ENV{PYTHONPATH} "/opt/ros/humble/lib/python3.10/site-packages/")
 set(CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} ${CMAKE_CURRENT_SOURCE_DIR}/CMakeModules)
@@ -19,6 +23,7 @@ endif()
 
 set(ENV{PROJECT_PATH} "${PROJECT_SOURCE_DIR}")
 add_definitions(-DPROJECT_PATH="${PROJECT_SOURCE_DIR}")
+# add_compile_definitions(EIGEN_MALLOC_ALREADY_ALIGNED=0)
 # add_definitions(${PCL_DEFINITIONS})
 
 set(USER_HOME $ENV{HOME})
@@ -44,7 +49,7 @@ find_package(Pangolin REQUIRED)
 find_package(pcl_ros REQUIRED)
 find_package(pcl_conversions REQUIRED)
 # find_package(PCL 1.12 REQUIRED)
-find_package(OpenCV REQUIRED)
+find_package(OpenCV 4.0 REQUIRED)
 
 # find_package(RTABMap REQUIRED)
 # find_package(imu_filter_madgwick REQUIRED)
@@ -131,7 +136,12 @@ target_include_directories(visualize_node PUBLIC
 )
 
 target_link_libraries(imu_mono_node_cpp PUBLIC ${ORB_SLAM3_LIBRARY}
-    ${libpointmatcher_LIBRARIES} ${libpointmatcher_ros_LIBRARIES} ${OpenCV_LIBS} ${PCL_LIBRARIES} ${pcl_ros_LIBRARIES} ${pcl_conversions_LIBRARIES})
+    ${ORB_SLAM3_ROOT_DIR}/Thirdparty/g2o/lib/libg2o.so
+    ${ORB_SLAM3_ROOT_DIR}/Thirdparty/DBoW2/lib/libDBoW2.so
+    Sophus::Sophus
+    ${libpointmatcher_LIBRARIES} ${libpointmatcher_ros_LIBRARIES} ${OpenCV_LIBS} ${PCL_LIBRARIES} ${pcl_ros_LIBRARIES} ${pcl_conversions_LIBRARIES}
+    yaml-cpp
+  )
 target_link_libraries(visualize_node PUBLIC ${PCL_LIBRARIES} yaml-cpp)
 # target_link_libraries(orb_camera_info_node PUBLIC yaml-cpp)
 # target_link_libraries(orb_camera_info_node PUBLIC ${PCL_LIBRARIES})

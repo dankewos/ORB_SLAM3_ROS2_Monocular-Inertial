@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 2.8)
 project(ORB_SLAM3)
 
+add_definitions(-DEIGEN_MALLOC_ALREADY_ALIGNED=0)
+add_definitions(-DEIGEN_DONT_VECTORIZE)
+
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 IF(NOT CMAKE_BUILD_TYPE)
