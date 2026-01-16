@@ -96,12 +96,12 @@ def generate_launch_description():
                 package="orb_slam3_ros2",
                 executable="imu_mono_node_cpp",
                 output="screen",
-                # prefix="xterm -e gdb --args",
+                #prefix="xterm -e gdb -ex run --args",
                 parameters=[
                     {
                         "sensor_type": LaunchConfiguration("sensor_type"),
                         "use_pangolin": LaunchConfiguration("use_pangolin"),
-                        #"use_sim_time": True,
+                        "use_sim_time": True,
                     }
                 ],
             ),

@@ -82,11 +82,11 @@ class TUMVIDatasetPlayer(Node):
         self.imu_idx = 0
 
         # Tiempo de inicio del dataset
-        self.dataset_start_time = self.image_data[0][0] if self.image_data else 0
+        self.dataset_start_time = (self.image_data[0][0]-0.2) if self.image_data else 0
         self.wall_start_time = time.time()
 
         #Condicion para que el dataset espere un poco
-        self.startup_delay = 0.0 
+        self.startup_delay = 2.0 
         self.first_publish = True
 
         # timer principal
@@ -184,9 +184,9 @@ class TUMVIDatasetPlayer(Node):
 
         print(f"DEBUG: Reloj={current_dataset_time:.3f} | Img_Idx={self.img_idx}/{len(self.image_data)}", end='\r')
 
-        # msg_clock = Clock()
-        # msg_clock.clock = self.timestamp_to_ros(current_dataset_time)
-        # self.pub_clock.publish(msg_clock)
+        msg_clock = Clock()
+        msg_clock.clock = self.timestamp_to_ros(current_dataset_time)
+        self.pub_clock.publish(msg_clock)
 
         #retraso inicial
         if self.first_publish:
