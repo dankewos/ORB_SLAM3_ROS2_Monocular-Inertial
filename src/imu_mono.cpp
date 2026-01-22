@@ -329,112 +329,164 @@ private:
 
     void timer_callback()
     {
-        std::unique_lock<std::mutex> lock(orbslam3_mutex_);
-
-        if (orb_slam3_system_->isImuInitialized()) {
-            int64_t total_nanoseconds = static_cast<int64_t>(tImage_ * 1e9);
-            rclcpp::Time dataset_time(total_nanoseconds, RCL_ROS_TIME);
-
-            auto Twc = Tcw_.inverse();
-
-            tf2::Quaternion q_orig(Twc.unit_quaternion().x(), Twc.unit_quaternion().y(), Twc.unit_quaternion().z(), Twc.unit_quaternion().w());
-            tf2::Matrix3x3 m(q_orig);
-            double roll, pitch, yaw;
-            m.getRPY(roll, pitch, yaw);
-
-            tf2::Quaternion q_yaw;
-            q_yaw.setRPY(0, 0, yaw);
-            tf2::Quaternion q_rot_z;
-            q_rot_z.setRPY(0, 0, M_PI / 2.0);
-
-            tf2::Quaternion q_combined = q_rot_z * q_yaw;
-            q_combined.normalize();
-
-            geometry_msgs::msg::TransformStamped odom_tf;
-            odom_tf.header.stamp = dataset_time;
-            odom_tf.header.frame_id = "odom";
-            odom_tf.child_frame_id = "base_link";
-            odom_tf.transform.translation.x = Twc.translation().x();
-            odom_tf.transform.translation.y = Twc.translation().y();
-            odom_tf.transform.translation.z = Twc.translation().z();
-            odom_tf.transform.rotation.x = Twc.unit_quaternion().x();
-            odom_tf.transform.rotation.y = Twc.unit_quaternion().y();
-            odom_tf.transform.rotation.z = Twc.unit_quaternion().z();
-            odom_tf.transform.rotation.w = Twc.unit_quaternion().w();
-            tf_broadcaster->sendTransform(odom_tf);
-
-            nav_msgs::msg::Odometry odom;
-            odom.header.stamp = dataset_time;
-            odom.header.frame_id = "odom";
-            odom.child_frame_id = "base_link";
-            odom.pose.pose.position.x = Twc.translation().x();
-            odom.pose.pose.position.y = Twc.translation().y();
-            odom.pose.pose.position.z = Twc.translation().z();
-            odom.pose.pose.orientation.x = Twc.unit_quaternion().x();
-            odom.pose.pose.orientation.y = Twc.unit_quaternion().y();
-            odom.pose.pose.orientation.z = Twc.unit_quaternion().z();
-            odom.pose.pose.orientation.w = Twc.unit_quaternion().w();
-            odom_publisher_->publish(odom);
-
-            geometry_msgs::msg::Pose pose;
-            pose.position.x = Twc.translation().x();
-            pose.position.y = Twc.translation().y();
-            pose.orientation.x = q_combined.x();
-            pose.orientation.y = q_combined.y();
-            pose.orientation.z = q_combined.z();
-            pose.orientation.w = q_combined.w();
-            pose_array_.header.stamp = dataset_time;
-            pose_array_.poses.push_back(pose);
-            pose_array_publisher_->publish(pose_array_);
-
-            geometry_msgs::msg::TransformStamped point_cloud_tf;
-            point_cloud_tf.header.stamp = dataset_time;
-            point_cloud_tf.header.frame_id = "map";
-            point_cloud_tf.child_frame_id = "point_cloud";
-            tf_broadcaster->sendTransform(point_cloud_tf);
-
-            geometry_msgs::msg::TransformStamped live_map_tf;
-            live_map_tf.header.stamp = dataset_time;
-            live_map_tf.header.frame_id = "map";
-            live_map_tf.child_frame_id = "live_map";
-            tf_broadcaster->sendTransform(live_map_tf);
-
-            // live_pcl_cloud_ = orb_slam3_system_->GetMapPCL();
-
-            // pcl::PointCloud<pcl::PointXYZ>::Ptr live_ptr =
-            // std::make_shared<pcl::PointCloud<pcl::PointXYZ>>(live_pcl_cloud_);
-
-            // pcl::PointCloud<pcl::PointXYZ>::Ptr filtered_cloud_ptr(
-            //   new pcl::PointCloud<pcl::PointXYZ>);
-            // filtered_cloud_ptr = filter_point_cloud(live_ptr);
-
-            // filtered_cloud_ptr->width = filtered_cloud_ptr->points.size();
-            // pcl::toROSMsg(*filtered_cloud_ptr, live_pcl_cloud_msg_);
-
-            // // this can go
-            // // live_occupancy_grid_ = point_cloud_to_occupancy_grid(filtered_cloud_ptr);
-            // // live_occupancy_grid_->header.stamp = time_now;
-            // // live_occupancy_grid_->header.frame_id = "live_map";
-            // // live_occupancy_grid_publisher_->publish(*live_occupancy_grid_);
-
-            // live_pcl_cloud_msg_.header.stamp = dataset_time;
-            // live_pcl_cloud_msg_.header.frame_id = "live_map";
-            // live_point_cloud_publisher_->publish(live_pcl_cloud_msg_);
-
-        } else {
-            RCLCPP_INFO_STREAM(get_logger(), "IMU not initialized");
-            initialize_variables();
+        std::unique_lock<std::mutex> lock(orbslam3_mutex_, std::defer_lock);
+        if (!lock.try_lock()) {
+            return;
         }
+
+        Sophus::SE3f Tcw_copy;
+        double tImage_copy = 0.0;
+        bool imu_initialized = false;
+        bool ba1_status = false;
+        bool ba2_status = false;
         
-        if (!inertial_ba1_ && orb_slam3_system_->GetInertialBA1()) {
-            inertial_ba1_ = true;
-            initialize_variables();
-            RCLCPP_INFO(get_logger(), "Inertial BA1 complete");
+        pcl::PointCloud<pcl::PointXYZ>::Ptr cloud_copy(new pcl::PointCloud<pcl::PointXYZ>);
+
+        
+          imu_initialized = orb_slam3_system_-> isImuInitialized();
+          if (imu_initialized) {
+            Tcw_copy = Tcw_;
+            tImage_copy = tImage_;
+            
+            ba1_status = orb_slam3_system_->GetInertialBA1();
+            ba2_status = orb_slam3_system_->GetInertialBA2();
+
+            if (orb_slam3_system_->GetTrackingState() == 2) {
+
+                pcl::PointCloud<pcl::PointXYZ> map_data = orb_slam3_system_->GetMapPCL();
+        
+                if (!map_data.empty()) {
+                    pcl::copyPointCloud(map_data, *cloud_copy);
+                }
+            }
+
+            RCLCPP_INFO(this->get_logger(), "Puntos en la nube: %zu", cloud_copy->points.size());
+
+            //printf("size of map_data %ld \n", sizeof(map_data)/sizeof(map_data[0]));
+          }
+
+          lock.unlock();
+        
+
+        if (!imu_initialized) {
+          RCLCPP_INFO_STREAM(get_logger(), "IMU not initialized");
+          initialize_variables();
+          return;
         }
-        if (!inertial_ba2_ && orb_slam3_system_->GetInertialBA2()) {
-            inertial_ba2_ = true;
-            initialize_variables();
-            RCLCPP_INFO(get_logger(), "Inertial BA2 complete");
+
+        int64_t total_nanoseconds = static_cast<int64_t>(tImage_ * 1e9);
+        rclcpp::Time dataset_time(total_nanoseconds, RCL_ROS_TIME);
+
+        auto Twc = Tcw_copy.inverse();
+
+        tf2::Quaternion q_orig(Twc.unit_quaternion().x(), Twc.unit_quaternion().y(), Twc.unit_quaternion().z(), Twc.unit_quaternion().w());
+        tf2::Matrix3x3 m(q_orig);
+        double roll, pitch, yaw;
+        m.getRPY(roll, pitch, yaw);
+
+        tf2::Quaternion q_yaw;
+        q_yaw.setRPY(0, 0, yaw);
+        tf2::Quaternion q_rot_z;
+        q_rot_z.setRPY(0, 0, M_PI / 2.0);
+
+        tf2::Quaternion q_combined = q_rot_z * q_yaw;
+        q_combined.normalize();
+
+        geometry_msgs::msg::TransformStamped odom_tf;
+        odom_tf.header.stamp = dataset_time;
+        odom_tf.header.frame_id = "odom";
+        odom_tf.child_frame_id = "base_link";
+        odom_tf.transform.translation.x = Twc.translation().x();
+        odom_tf.transform.translation.y = Twc.translation().y();
+        odom_tf.transform.translation.z = Twc.translation().z();
+        odom_tf.transform.rotation.x = Twc.unit_quaternion().x();
+        odom_tf.transform.rotation.y = Twc.unit_quaternion().y();
+        odom_tf.transform.rotation.z = Twc.unit_quaternion().z();
+        odom_tf.transform.rotation.w = Twc.unit_quaternion().w();
+        tf_broadcaster->sendTransform(odom_tf);
+
+        nav_msgs::msg::Odometry odom;
+        odom.header.stamp = dataset_time;
+        odom.header.frame_id = "odom";
+        odom.child_frame_id = "base_link";
+        odom.pose.pose.position.x = Twc.translation().x();
+        odom.pose.pose.position.y = Twc.translation().y();
+        odom.pose.pose.position.z = Twc.translation().z();
+        odom.pose.pose.orientation.x = Twc.unit_quaternion().x();
+        odom.pose.pose.orientation.y = Twc.unit_quaternion().y();
+        odom.pose.pose.orientation.z = Twc.unit_quaternion().z();
+        odom.pose.pose.orientation.w = Twc.unit_quaternion().w();
+        odom_publisher_->publish(odom);
+
+        geometry_msgs::msg::Pose pose;
+        pose.position.x = Twc.translation().x();
+        pose.position.y = Twc.translation().y();
+        pose.orientation.x = q_combined.x();
+        pose.orientation.y = q_combined.y();
+        pose.orientation.z = q_combined.z();
+        pose.orientation.w = q_combined.w();
+        pose_array_.header.stamp = dataset_time;
+        pose_array_.poses.push_back(pose);
+        pose_array_publisher_->publish(pose_array_);
+
+        geometry_msgs::msg::TransformStamped point_cloud_tf;
+        point_cloud_tf.header.stamp = dataset_time;
+        point_cloud_tf.header.frame_id = "map";
+        point_cloud_tf.child_frame_id = "point_cloud";
+        tf_broadcaster->sendTransform(point_cloud_tf);
+
+        geometry_msgs::msg::TransformStamped live_map_tf;
+        live_map_tf.header.stamp = dataset_time;
+        live_map_tf.header.frame_id = "map";
+        live_map_tf.child_frame_id = "live_map";
+        tf_broadcaster->sendTransform(live_map_tf);
+        printf("hola");
+        {
+          if (!cloud_copy->empty()) {
+            printf("\nif");
+            try {
+                printf("dentro del try");
+                printf("sizeof %ld \n", sizeof cloud_copy); 
+              auto filtered_cloud_ptr = filter_point_cloud(cloud_copy);
+            //   filtered_cloud_ptr->width = filtered_cloud_ptr->points.size();
+
+            //   printf("previo sensor");
+
+            //   sensor_msgs::msg::PointCloud2 cloud_msg_;
+            //   pcl::toROSMsg(*filtered_cloud_ptr, cloud_msg_);
+            //   cloud_msg_.header.stamp = dataset_time;
+            //   cloud_msg_.header.frame_id = "map";
+            //   live_point_cloud_publisher_->publish(cloud_msg_);
+                
+            //   printf("after sensor");
+            //   // this can go
+            //   // auto grid = point_cloud_to_occupancy_grid(filtered_cloud_ptr);
+            //   // grid->header.stamp = dataset_time;
+            //   // grid->header.frame_id = "map";
+            //   // live_occupancy_grid_publisher_->publish(*grid);
+
+
+                // 
+                
+            } 
+                catch (const std::exception &e) {
+                    RCLCPP_ERROR(get_logger(), "Error procesando PCL: %s", e.what());
+                }
+          }
+        }
+
+        {
+          std::lock_guard<std::mutex> lock(orbslam3_mutex_);
+          if (!inertial_ba1_ && ba1_status) {
+              inertial_ba1_ = true;
+              initialize_variables();
+              RCLCPP_INFO(get_logger(), "Inertial BA1 complete");
+          }
+          if (!inertial_ba2_ && ba2_status) {
+              inertial_ba2_ = true;
+              initialize_variables();
+              RCLCPP_INFO(get_logger(), "Inertial BA2 complete");
+          }
         }
     }
 
@@ -484,8 +536,7 @@ private:
 
     std::string timestamp_;
     double tImage_;
-};
-
+  };
 int main(int argc, char *argv[])
 {
     rclcpp::init(argc, argv);
